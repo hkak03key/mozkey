@@ -1,0 +1,29 @@
+Delegation session: 83dcf3caa90542f099dd89b8123c337f
+Codex model: gpt-6.2-astra
+Codex effort: high
+**critical 3 のうち、deferred presentation の実行時既定を 300 ms とした判断は妥当です。** 前回確認した proto の **250 ms** と、`session.cc` がフィールド未設定時に採用する **300 ms** は両立します。一方、「Tab は常に同期 `Predict()` を呼ぶ」「短い読みで採用した補完は次回そのまま再生される」という説明は、公開コードと一致しません。[timeout の解決](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L1151-L1183)、[Tab の分岐](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L11093-L11163)、[feedback の照会](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L7151-L7163)
+
+今回のメッセージから取得できたのは 5 件のパスです。公開リポジトリのコミット `0eaeef17` では、初版が挙げた `session.cc:7856`、`:11135` などの位置と実装が一致しました。以下はこの固定版での判定です。更新版 `conclusion.md` は同コミットの指定パスから取得できず、**更新版本文・反映ログの記述と、各指摘が反映済みかどうかは未判定**です。[照合したコミット](https://github.com/koyasi777/mozkey/commit/0eaeef17e37a576301cba759e7a1c5419f77c42d)
+
+## critical
+
+- **短い読みの自動再利用については、前回より強く判定できます。** 新規設定では短い key の除外が有効で、閾値は 7 文字です。session はこのポリシーを `GetAcceptedCandidates` に明示的に渡し、store は閾値未満なら空を返します。したがって既定設定では、「ありが」で受理した値が**この fast path から**次回再生されることはありません。記録と Mozc 履歴学習は独立しているため、そちらに不適切な組が渡るリスクは残ります。更新版がこの区別を採用していれば、round 1 の critical 2 は解消です。[製品既定値と旧設定の継承](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/config/config_handler.cc#L373-L395)、[session からのポリシー受け渡し](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L7151-L7163)、[store の早期 return](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/zenz_feedback_store.cc#L1425-L1433)
+- **scorer について確認できたのは Windows 側も予測用 prompt を送れることまでです。** Windows も greedy・非ストリーム・固定 stop で、返すのは整形した `content` です。空なら `empty_content` になります。追加ソースによって OS 間の裏取りは進みましたが、読みの妥当性、azooKey 相当の停止判定、補完品質を示す証拠は増えていません。更新版の「そのまま使える」が通信経路を指すなら指摘なしです。[Windows の HTTP 要求](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main.cc#L1190-L1229)、[応答の処理](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main.cc#L1309-L1323)
+
+## should-fix
+
+1. **Tab の統合先を `Predict()` の直後だけに置くと、表示済みの候補を選ぶ経路を取りこぼします。** MS-IME キーマップで Tab が `PredictAndConvert` に割り当てられること、同期 `Predict()` を呼ぶ分岐があることは確認できました。ただし通常経路・live conversion 経路とも先に `FocusDisplayedPassiveSuggestion()` を試します。表示済みリストの昇格が成功すれば再予測せずに終了し、通常経路で既に変換状態なら `ConvertNext()` に進みます。Tab 統合案では、候補窓に表示した候補と、実際に選択・確定される候補が一致するところまで扱う必要があります。[キーマップ](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/data/keymap/ms-ime.tsv#L60)、[表示済み候補の昇格](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L10070-L10125)、[予測コマンドの全分岐](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L11093-L11164)
+
+2. **live preedit の表示と学習では、成立条件が違います。** 採用値は実際に `OutputZenzLiveCorrection` で強調表示の preedit に入ります。strict が有効なら、その前に修復後の表記を元の key に対して検査します。表示だけでは accepted は記録しません。受理後の Mozc 履歴学習では許可条件を再確認し、投影した区間での学習件数がゼロなら保存済みの全 key/value での学習を試します。したがって「投影に失敗すれば誤学習の可能性も消える」とはいえず、逆に「表示された時点で誤学習する」ともいえません。[strict 検査](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L8215-L8226)、[preedit 表示と記録の境界](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L8346-L8388)、[確定時の学習とフォールバック](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L5786-L5821)
+
+3. **時間設定は、どの区間の値かまで書けば critical 3 の該当部分を解消できます。** live correction は未設定時 180 ms・上限 1000 ms、debounce は未設定時 700 ms です。deferred は未設定時 300 ms、明示的に 250 ms を保存した場合は 250 ms、範囲は 50～3000 ms です。poll の指定間隔は 24 ms、通常の非同期待機窓は 3000 ms ですが、deferred が有効なら **`TakeResult()` より先に**表示期限を判定して要求を破棄します。Windows の 1500 ms も起動準備の**待機予算の下限**であり、準備完了時には直ちに戻れます。いずれも Tab から表示までの実測値ではありません。[proto の 250 ms](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/protocol/config.proto#L402-L410)、[session の定数](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L272-L288)、[表示期限と結果取得の順序](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L7901-L7947)、[Windows の起動待ち](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main.cc#L1521-L1558)
+
+## nits
+
+- **ログで測れる範囲。** `[zenz] async response` は成功・timeout・世代などを出しますが、その行自体には `latency_msec` がありません。Windows scorer の応答には処理時間が入り、scorer 側ログにも値が出ます。Tab の体感遅延を測るには、候補表示側にも終点が必要です。[session のログ項目](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L7919-L7930)、[Windows scorer の計時と応答](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main.cc#L1698-L1711)
+
+**確認できたため指摘なし。** 公開固定版では、live correction の session 要求は `max_output_chars=256`、macOS 同梱 scorer は `zenz-v3.2-small-Q5_K_M.gguf`・ctx 256・4 スレッド・`n_predict=64` です。Windows の既定も一致し、モデルと推論設定には上書き手段があります。したがって「既定構成で生成上限 64 token」は確認済みにできます。実際の生成長、補完の的中率、Tab の応答時間は引き続き未測定です。[session の送信値](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/session/session.cc#L7848-L7857)、[macOS の定数](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main_posix.cc#L17-L20)、[macOS 起動設定への適用](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main_posix.cc#L64-L82)、[Windows の起動設定](https://github.com/koyasi777/mozkey/blob/0eaeef17e37a576301cba759e7a1c5419f77c42d/src/zenz_scorer/main.cc#L286-L315)
+
+反映済み・残件を確定するために必要なのは、**更新版 `conclusion.md` の本文または round 1 からの差分（末尾ログを含む）**です。追加ソースが上記コミットと同じ場合、4 ファイルの再添付は不要です。
+
+[exited with code 0]
